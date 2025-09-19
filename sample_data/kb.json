@@ -1,0 +1,23 @@
+[
+  {
+    "title": "Einführung Spiegelneuronen",
+    "text": "Spiegelneuronen unterstützen Empathie und soziales Lernen. Sie verknüpfen Wahrnehmung und Handlung.",
+    "tags": [
+      "neuro"
+    ]
+  },
+  {
+    "title": "DNA-RAG Konzept",
+    "text": "k-Mer Hybridisierung, Promoter/Enhancer/Silencer modulieren die Abrufstärke.",
+    "tags": [
+      "dna"
+    ]
+  },
+  {
+    "title": "Risiken und Filter",
+    "text": "Übermäßige Nachahmung kann zu Anfälligkeit für Manipulation führen. Kritische Filter sind nötig.",
+    "tags": [
+      "sicherheit"
+    ]
+  }
+]
