@@ -1,62 +1,27 @@
 
-"""
-dna_mirror_hyperrag.app
-FastAPI-App, die den DNA-Mirror-HyperRAG-Dienst bereitstellt.
-"""
+"""FastAPI surface for the DNA-Mirror-HyperRAG service."""
+
 from __future__ import annotations
 
-import os
-import re
-from pathlib import Path
-from typing import Optional, List
+from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from dna_mirror_hyperrag.core import (
-    RAGConfig, DNAMirrorHyperRAG, Neuromodulators, HyperGraph, Gene, HyperEdge, DNAIndex
-)
-from dna_mirror_hyperrag.loaders import build_hgraph_from_sources, genes_from_text_document
-
-def _paths(var: str) -> list[str]:
-    v = os.getenv(var, "").strip()
-    return [p.strip() for p in v.split(",") if p.strip()] if v else []
-
-MD_PATHS = _paths("RAG_MD_PATHS") or ["sample_data/docs.md"]
-JSON_PATHS = _paths("RAG_JSON_PATHS") or ["sample_data/kb.json"]
-
-DEFAULT_PROMOTERS = [("spiegelneuronen", 0.3), ("dna", 0.2)]
-JSON_REGULATORY = {
-    "neuro": [("imitationslernen", 0.2)],
-    "dna": [("k-mer", 0.25), ("promoter", 0.15)],
-    "sicherheit": [("risiken", 0.2)],
-}
-
-hg: HyperGraph = build_hgraph_from_sources(
-    md_files=MD_PATHS, json_files=JSON_PATHS,
-    default_promoters=DEFAULT_PROMOTERS,
-    json_regulatory=JSON_REGULATORY,
+from dna_mirror_hyperrag.core import Neuromodulators
+from dna_mirror_hyperrag.runtime import (
+    RuntimeState,
+    initialize_runtime,
+    ingest_text_document,
 )
 
-rag = DNAMirrorHyperRAG(
-    hg,
-    RAGConfig(
-        top_k=5,
-        synthesis_max_sentences=4,
-        kmer_k=3,
-        default_view="grundlagen",
-        dynamic_k=True,
-        energy_decay_rate=0.005,
-        energy_recharge_amount=0.1,
-        min_gene_energy=0.1,
-        quantum_jump_threshold=0.7,
-        quantum_plasma_influence=0.5,
-        quantum_max_jump_factor=0.3,
-    ),
-)
 
-app = FastAPI(title="DNA-Mirror-HyperRAG", version="0.3.0")
+runtime: RuntimeState = initialize_runtime()
+hg = runtime.graph
+rag = runtime.rag
+
+app = FastAPI(title="DNA-Mirror-HyperRAG", version="0.4.0")
 
 class QueryRequest(BaseModel):
     query: str
@@ -77,12 +42,6 @@ class UploadResponse(BaseModel):
     added_genes: list[str]
     added_edges: list[str]
     total_nodes: int
-
-
-def _sanitize_identifier(name: str) -> str:
-    safe = re.sub(r"[^0-9A-Za-z_]+", "_", name).strip("_")
-    return safe or "upload"
-
 @app.get("/health")
 def health():
     return {"status": "ok", "nodes": len(hg.nodes), "edges": len(hg.edges), "k": rag.index.k}
@@ -108,22 +67,27 @@ class AddGeneRequest(BaseModel):
 def add_gene(req: AddGeneRequest):
     if req.id in hg.nodes:
         raise HTTPException(status_code=400, detail=f"Gene-ID existiert bereits: {req.id}")
-    from dna_mirror_hyperrag.core import RegulatorySite
-    sites = [RegulatorySite(t,p,float(b)) for (t,p,b) in (req.sites or [])]
-    g = Gene(req.id, req.sequence, sites=sites, metadata=req.metadata or {"title": req.title or req.id})
-    hg.add_gene(g)
-    # Index neu bauen (einfachheitshalber)
+    from dna_mirror_hyperrag.core import RegulatorySite, Gene, DNAIndex
+
+    sites = [RegulatorySite(t, p, float(b)) for (t, p, b) in (req.sites or [])]
+    gene = Gene(
+        req.id,
+        req.sequence,
+        sites=sites,
+        metadata=req.metadata or {"title": req.title or req.id},
+    )
+    hg.add_gene(gene)
     rag.index = DNAIndex(k=rag.config.kmer_k).build_from(
         hg.nodes.values(), energy_module=rag.light_energy_module
     )
-    return {"status":"added","id":req.id}
+    return {"status": "added", "id": req.id}
 
 
 @app.post("/upload", response_model=UploadResponse)
 async def upload_text_files(
     files: List[UploadFile] = File(...),
-    tokens_per_chunk: int = Form(220),
-    overlap: int = Form(40),
+    tokens_per_chunk: int = 220,
+    overlap: int = 40,
 ):
     if not files:
         raise HTTPException(status_code=400, detail="Keine Dateien übermittelt.")
@@ -138,54 +102,30 @@ async def upload_text_files(
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
-            raise HTTPException(status_code=400, detail=f"Datei {file.filename!r} ist keine UTF-8 Textdatei.")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Datei {file.filename!r} ist keine UTF-8 Textdatei.",
+            )
 
-        base_name = Path(file.filename or "upload").stem or "upload"
-        safe_base = _sanitize_identifier(base_name)
-
-        genes = genes_from_text_document(
+        result = ingest_text_document(
             text,
-            safe_base,
-            tokens_per_chunk=max(50, tokens_per_chunk),
-            overlap=max(0, overlap),
-            default_promoters=DEFAULT_PROMOTERS,
+            file.filename or "upload",
+            runtime,
+            tokens_per_chunk=tokens_per_chunk,
+            overlap=overlap,
         )
-
-        if not genes:
-            continue
-
-        for gene in genes:
-            base_id = gene.id
-            suffix = 1
-            while gene.id in hg.nodes:
-                gene.id = f"{base_id}_{suffix}"
-                suffix += 1
-            gene.metadata = dict(gene.metadata)
-            gene.metadata.update({
-                "original_filename": file.filename,
-                "source": f"upload:{file.filename or safe_base}",
-            })
-            hg.add_gene(gene)
-            rag.index.add(gene)
-            added_genes.append(gene.id)
-
-        members = {gene.id for gene in genes}
-        edge_base = f"TXT_EDGE_{safe_base}"
-        edge_id = edge_base
-        suffix = 1
-        while edge_id in hg.edges:
-            edge_id = f"{edge_base}_{suffix}"
-            suffix += 1
-        edge = HyperEdge(edge_id, file.filename or safe_base, members)
-        hg.add_edge(edge)
-        added_edges.append(edge.id)
-        if "grundlagen" in hg.views:
-            hg.views["grundlagen"].update(members)
+        added_genes.extend(result["added_genes"])
+        if result["edge_id"]:
+            added_edges.append(result["edge_id"])
 
     if not added_genes:
         raise HTTPException(status_code=400, detail="Keine gültigen Textdaten gefunden.")
 
-    return UploadResponse(added_genes=added_genes, added_edges=added_edges, total_nodes=len(hg.nodes))
+    return UploadResponse(
+        added_genes=added_genes,
+        added_edges=added_edges,
+        total_nodes=len(hg.nodes),
+    )
 
 # Minimal-UI
 @app.get("/ui")

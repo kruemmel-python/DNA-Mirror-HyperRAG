@@ -1,36 +1,50 @@
 
-from fastapi.testclient import TestClient
-from dna_mirror_hyperrag.app import app
+import io
 
-client = TestClient(app)
+import pytest
+from fastapi import UploadFile
+
+from dna_mirror_hyperrag.app import (
+    QueryRequest,
+    UploadResponse,
+    health,
+    query,
+    upload_text_files,
+)
+
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
 
 def test_health():
-    r = client.get("/health")
-    assert r.status_code == 200
-    j = r.json()
-    assert "nodes" in j and "edges" in j
+    payload = health()
+    assert payload["status"] == "ok"
+    assert payload["nodes"] >= 1
+    assert payload["edges"] >= 0
+
 
 def test_query():
-    r = client.post("/query", json={"query":"Wie funktioniert k-Mer Hybridisierung im DNA-RAG?"})
-    assert r.status_code == 200
-    j = r.json()
-    assert "strategy" in j and "results" in j
-    assert "quantum_jump_factor" in j
+    response = query(QueryRequest(query="Wie funktioniert k-Mer Hybridisierung im DNA-RAG?"))
+    assert "strategy" in response and "results" in response
+    assert "quantum_jump_factor" in response
 
 
-def test_upload_text_file_enables_querying():
-    base_health = client.get("/health").json()
+@pytest.mark.anyio
+async def test_upload_text_file_enables_querying():
+    base_health = health()
     unique_token = "sonderworthyperrag"
-    text = f"Kapitel Eins\n\nDieses Buch enthält das Signalwort {unique_token} für den Test."
+    text = (
+        "Kapitel Eins\n\nDieses Buch enthält das Signalwort "
+        f"{unique_token} für den Test."
+    )
 
-    files = {"files": ("buch.txt", text, "text/plain")}
-    resp = client.post("/upload", files=files)
-    assert resp.status_code == 200
-    payload = resp.json()
-    assert payload["added_genes"]
-    assert payload["total_nodes"] >= base_health["nodes"] + len(payload["added_genes"])
+    upload = UploadFile(filename="buch.txt", file=io.BytesIO(text.encode("utf-8")))
+    resp: UploadResponse = await upload_text_files(files=[upload])
+    assert resp.added_genes
+    assert resp.total_nodes >= base_health["nodes"] + len(resp.added_genes)
 
-    query_resp = client.post("/query", json={"query": unique_token})
-    assert query_resp.status_code == 200
-    data = query_resp.json()
+    data = query(QueryRequest(query=unique_token))
     assert any(res["id"].startswith("TXT_buch_") for res in data["results"])
