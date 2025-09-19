@@ -1,40 +1,28 @@
 
-"""
-dna_mirror_hyperrag.app
-FastAPI-App, die den DNA-Mirror-HyperRAG-Dienst bereitstellt.
-"""
+"""FastAPI surface for the DNA-Mirror-HyperRAG service."""
+
 from __future__ import annotations
 
-import os
-from typing import Optional, List
-from fastapi import FastAPI, HTTPException
+from typing import List, Optional
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from dna_mirror_hyperrag.core import (
-    RAGConfig, DNAMirrorHyperRAG, Neuromodulators, HyperGraph, Gene, HyperEdge, DNAIndex
-)
-from dna_mirror_hyperrag.loaders import build_hgraph_from_sources
-
-def _paths(var: str) -> list[str]:
-    v = os.getenv(var, "").strip()
-    return [p.strip() for p in v.split(",") if p.strip()] if v else []
-
-MD_PATHS = _paths("RAG_MD_PATHS") or ["sample_data/docs.md"]
-JSON_PATHS = _paths("RAG_JSON_PATHS") or ["sample_data/kb.json"]
-
-hg: HyperGraph = build_hgraph_from_sources(
-    md_files=MD_PATHS, json_files=JSON_PATHS,
-    default_promoters=[("spiegelneuronen", 0.3), ("dna", 0.2)],
-    json_regulatory={
-        "neuro": [("imitationslernen", 0.2)],
-        "dna": [("k-mer", 0.25), ("promoter", 0.15)],
-        "sicherheit": [("risiken", 0.2)],
-    }
+from dna_mirror_hyperrag.core import Neuromodulators
+from dna_mirror_hyperrag.runtime import (
+    RuntimeState,
+    initialize_runtime,
+    ingest_text_document,
 )
 
-rag = DNAMirrorHyperRAG(hg, RAGConfig(top_k=5, synthesis_max_sentences=4, kmer_k=3, default_view="grundlagen", dynamic_k=True))
 
-app = FastAPI(title="DNA-Mirror-HyperRAG", version="0.3.0")
+runtime: RuntimeState = initialize_runtime()
+hg = runtime.graph
+rag = runtime.rag
+embedder = runtime.embedder
+
+app = FastAPI(title="DNA-Mirror-HyperRAG", version="0.4.0")
 
 class QueryRequest(BaseModel):
     query: str
@@ -46,9 +34,38 @@ class QueryResponse(BaseModel):
     strategy: str
     weight: float
     rationale: str
+    quantum_jump_factor: float
     results: list[dict]
     answer: str
 
+
+class UploadResponse(BaseModel):
+    added_genes: list[str]
+    added_edges: list[str]
+    total_nodes: int
+
+
+class EmbeddingRequest(BaseModel):
+    model: str = "dna-hyperrag-text-embedding"
+    input: str | list[str]
+
+
+class EmbeddingData(BaseModel):
+    object: str = "embedding"
+    embedding: list[float]
+    index: int
+
+
+class EmbeddingUsage(BaseModel):
+    prompt_tokens: int
+    total_tokens: int
+
+
+class EmbeddingResponse(BaseModel):
+    object: str = "list"
+    data: list[EmbeddingData]
+    model: str
+    usage: EmbeddingUsage
 @app.get("/health")
 def health():
     return {"status": "ok", "nodes": len(hg.nodes), "edges": len(hg.edges), "k": rag.index.k}
@@ -74,13 +91,87 @@ class AddGeneRequest(BaseModel):
 def add_gene(req: AddGeneRequest):
     if req.id in hg.nodes:
         raise HTTPException(status_code=400, detail=f"Gene-ID existiert bereits: {req.id}")
-    from dna_mirror_hyperrag.core import RegulatorySite
-    sites = [RegulatorySite(t,p,float(b)) for (t,p,b) in (req.sites or [])]
-    g = Gene(req.id, req.sequence, sites=sites, metadata=req.metadata or {"title": req.title or req.id})
-    hg.add_gene(g)
-    # Index neu bauen (einfachheitshalber)
-    rag.index = DNAIndex(k=rag.config.kmer_k).build_from(hg.nodes.values())
-    return {"status":"added","id":req.id}
+    from dna_mirror_hyperrag.core import RegulatorySite, Gene, DNAIndex
+
+    sites = [RegulatorySite(t, p, float(b)) for (t, p, b) in (req.sites or [])]
+    gene = Gene(
+        req.id,
+        req.sequence,
+        sites=sites,
+        metadata=req.metadata or {"title": req.title or req.id},
+    )
+    hg.add_gene(gene)
+    rag.index = DNAIndex(k=rag.config.kmer_k).build_from(
+        hg.nodes.values(), energy_module=rag.light_energy_module
+    )
+    return {"status": "added", "id": req.id}
+
+
+@app.post("/upload", response_model=UploadResponse)
+async def upload_text_files(
+    files: List[UploadFile] = File(...),
+    tokens_per_chunk: int = 220,
+    overlap: int = 40,
+):
+    if not files:
+        raise HTTPException(status_code=400, detail="Keine Dateien übermittelt.")
+
+    added_genes: list[str] = []
+    added_edges: list[str] = []
+
+    for file in files:
+        raw = await file.read()
+        if not raw:
+            continue
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Datei {file.filename!r} ist keine UTF-8 Textdatei.",
+            )
+
+        result = ingest_text_document(
+            text,
+            file.filename or "upload",
+            runtime,
+            tokens_per_chunk=tokens_per_chunk,
+            overlap=overlap,
+        )
+        added_genes.extend(result["added_genes"])
+        if result["edge_id"]:
+            added_edges.append(result["edge_id"])
+
+    if not added_genes:
+        raise HTTPException(status_code=400, detail="Keine gültigen Textdaten gefunden.")
+
+    return UploadResponse(
+        added_genes=added_genes,
+        added_edges=added_edges,
+        total_nodes=len(hg.nodes),
+    )
+
+
+@app.post("/v1/embeddings", response_model=EmbeddingResponse)
+def create_embeddings(req: EmbeddingRequest):
+    if isinstance(req.input, str):
+        cleaned = req.input.strip()
+        texts = [cleaned] if cleaned else []
+    else:
+        texts = [t.strip() for t in req.input if t and t.strip()]
+
+    if not texts:
+        raise HTTPException(status_code=400, detail="Eingabe darf nicht leer sein.")
+
+    data: list[EmbeddingData] = []
+    token_count = 0
+    for idx, text in enumerate(texts):
+        token_count += len(text.split())
+        vector = embedder.embed_text(text)
+        data.append(EmbeddingData(embedding=vector, index=idx))
+
+    usage = EmbeddingUsage(prompt_tokens=token_count, total_tokens=token_count)
+    return EmbeddingResponse(data=data, model=req.model, usage=usage)
 
 # Minimal-UI
 @app.get("/ui")
@@ -134,5 +225,4 @@ $('#go').addEventListener('click', async ()=>{
 </script>
 </body></html>
 """
-    from fastapi.responses import HTMLResponse
     return HTMLResponse(html)

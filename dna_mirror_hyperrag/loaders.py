@@ -14,6 +14,74 @@ from pathlib import Path
 from dna_mirror_hyperrag.core import Gene, RegulatorySite, HyperEdge, HyperGraph
 
 
+def _sanitize_space(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def chunk_plain_text(text: str, *, tokens_per_chunk: int = 220, overlap: int = 40) -> list[str]:
+    """Teilt längere Textdokumente in überlappende Sequenzen auf.
+
+    Args:
+        text: Der Ursprungstext.
+        tokens_per_chunk: Zielanzahl an Tokens pro Chunk.
+        overlap: Anzahl Tokens, die zwischen zwei Chunks überlappen sollen.
+
+    Returns:
+        Liste normalisierter Textsegmente.
+    """
+
+    text = re.sub(r"\r\n?", "\n", text).strip()
+    if not text:
+        return []
+
+    tokens = _sanitize_space(text).split(" ")
+    if not tokens:
+        return []
+
+    tokens_per_chunk = max(1, tokens_per_chunk)
+    overlap = max(0, min(overlap, tokens_per_chunk - 1))
+
+    chunks: list[str] = []
+    start = 0
+    total = len(tokens)
+    while start < total:
+        end = min(total, start + tokens_per_chunk)
+        chunk_tokens = tokens[start:end]
+        chunks.append(" ".join(chunk_tokens))
+        if end == total:
+            break
+        start = end - overlap
+    return chunks
+
+
+def genes_from_text_document(
+    text: str,
+    base_id: str,
+    *,
+    tokens_per_chunk: int = 220,
+    overlap: int = 40,
+    default_promoters: list[tuple[str, float]] | None = None,
+) -> list[Gene]:
+    """Erzeuge Gene aus einem Textdokument."""
+
+    chunks = chunk_plain_text(text, tokens_per_chunk=tokens_per_chunk, overlap=overlap)
+    genes: list[Gene] = []
+    promoters = [RegulatorySite("promoter", t, float(b)) for (t, b) in (default_promoters or [])]
+    for idx, chunk in enumerate(chunks):
+        gid = f"TXT_{base_id}_{idx}"
+        metadata = {"title": f"{base_id} Abschnitt {idx+1}", "source": base_id, "chunk_index": idx}
+        genes.append(
+            Gene(
+                gid,
+                chunk,
+                sites=list(promoters),
+                metadata=metadata,
+                energy=0.7,
+            )
+        )
+    return genes
+
+
 @dataclass
 class MarkdownSectionRule:
     heading_pattern: str = r'^##\s+(.*)$'
@@ -40,7 +108,15 @@ def load_markdown_as_genes(md_path: str | Path, rule: MarkdownSectionRule = Mark
             buf = []; return
         gid = f"MD_{p.stem}_{idx}"
         sites = [RegulatorySite("promoter", t, b) for (t,b) in (default_promoters or [])]
-        genes.append(Gene(gid, seq, sites=sites, metadata={"title": current_title or gid, "source": str(p)}))
+        genes.append(
+            Gene(
+                gid,
+                seq,
+                sites=sites,
+                metadata={"title": current_title or gid, "source": str(p)},
+                energy=0.7,
+            )
+        )
         if rule.as_topic_edge and current_title:
             edges.append(HyperEdge(f"E_{gid}", current_title, {gid}))
         idx += 1
@@ -76,7 +152,15 @@ def load_json_kb(json_path: str | Path, text_field: str = "text", title_field: s
                 for pat, boost in regulatory.get(tag, []):
                     sites.append(RegulatorySite("promoter", pat, float(boost)))
         gid = f"JSON_{p.stem}_{i}"
-        genes.append(Gene(gid, seq, sites=sites, metadata={"title": title, "source": str(p), "tags": tags}))
+        genes.append(
+            Gene(
+                gid,
+                seq,
+                sites=sites,
+                metadata={"title": title, "source": str(p), "tags": tags},
+                energy=0.6,
+            )
+        )
         if tags:
             edges.append(HyperEdge(f"E_{gid}", " ".join(map(str, tags)), {gid}))
     return genes, edges
