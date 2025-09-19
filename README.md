@@ -1,32 +1,22 @@
+# DNA-Mirror-HyperRAG (v3, vollständig)
 
-# DNA-Mirror-HyperRAG (Python 3.12)
+**Was drin ist**
+- Vollständige **Kernbibliothek** (`core.py`) – DNA-Index (k-Mer), Hypergraph, Mirror-Neurologie, RAG-Pipeline
+- **Loader** (`loaders.py`) für Markdown/JSON + Graph-Builder
+- **FastAPI-App** (`app.py`) mit `/health`, `/query`, `/ui`
+- **Evaluation** (`evaluate.py`) mit nDCG@k und MAP
+- **Sample-Daten** (`sample_data/`) und **Tests** (`tests/`)
 
-Ein DNA-inspiriertes Retrieval-Augmented-Generation (RAG) System mit Hypergraph-Folding
-und einer spiegel-neurologischen Entscheidungsschicht.
-
-## Schnellstart
-
-```bash
-# (optional) Python venv aktivieren
+## Schnellstart (Windows PowerShell)
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-
-# Tests
 pytest -q
-
-# Server starten
 uvicorn dna_mirror_hyperrag.app:app --reload
-# Dann: POST http://127.0.0.1:8000/query  {"query":"Erkläre DNA-RAG ..."}
+# Browser: http://127.0.0.1:8000/ui
 ```
 
-## Umgebungsvariablen
-
-- `RAG_MD_PATHS`  (kommasepariert), z. B. `sample_data/docs.md`
-- `RAG_JSON_PATHS` (kommasepariert), z. B. `sample_data/kb.json`
-
-## Architektur
-
-- `core.py`   – Kernlogik: Gene/HyperGraph/DNAIndex/Mirror/RAG-Pipeline
-- `loaders.py`– Loader für Markdown/JSON und Graph-Builder
-- `app.py`    – FastAPI-Server (Health/Query + Debug-Endpunkte)
-- `sample_data/` – Minimale Demo-Daten
-- `tests/`    – pytest Smoke-Tests
+## Env-Variablen (optional)
+- `RAG_MD_PATHS`  (kommaseparierte Pfade zu .md)
+- `RAG_JSON_PATHS` (kommaseparierte Pfade zu .json)

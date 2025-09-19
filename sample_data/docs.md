@@ -1,4 +1,3 @@
-
 # Demo-Dokumentation
 
 ## Spiegelneuronen und Imitationslernen

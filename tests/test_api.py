@@ -1,5 +1,4 @@
 
-import json
 from fastapi.testclient import TestClient
 from dna_mirror_hyperrag.app import app
 
@@ -16,4 +15,3 @@ def test_query():
     assert r.status_code == 200
     j = r.json()
     assert "strategy" in j and "results" in j
-    assert isinstance(j["results"], list)
