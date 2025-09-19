@@ -2,9 +2,12 @@
 import io
 
 import pytest
-from fastapi import UploadFile
+from fastapi import HTTPException, UploadFile
 
 from dna_mirror_hyperrag.app import (
+    EmbeddingRequest,
+    embedder,
+    create_embeddings,
     QueryRequest,
     UploadResponse,
     health,
@@ -48,3 +51,20 @@ async def test_upload_text_file_enables_querying():
 
     data = query(QueryRequest(query=unique_token))
     assert any(res["id"].startswith("TXT_buch_") for res in data["results"])
+
+
+def test_embeddings_endpoint_returns_normalised_vectors():
+    response = create_embeddings(EmbeddingRequest(input=["Hallo Welt", "Hallo Welt"]))
+    assert response.model == "dna-hyperrag-text-embedding"
+    assert len(response.data) == 2
+    assert response.data[0].embedding == response.data[1].embedding
+
+    for item in response.data:
+        assert len(item.embedding) == embedder.dimension
+        norm = sum(v * v for v in item.embedding) ** 0.5
+        assert norm == pytest.approx(1.0, rel=1e-6, abs=1e-6)
+
+
+def test_embeddings_endpoint_rejects_empty_payload():
+    with pytest.raises(HTTPException):
+        create_embeddings(EmbeddingRequest(input="   "))

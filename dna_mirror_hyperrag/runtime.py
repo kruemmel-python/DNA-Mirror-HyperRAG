@@ -22,6 +22,7 @@ from dna_mirror_hyperrag.core import (
     HyperGraph,
     RAGConfig,
 )
+from dna_mirror_hyperrag.embeddings import TextEmbedder
 from dna_mirror_hyperrag.loaders import build_hgraph_from_sources, genes_from_text_document
 
 __all__ = [
@@ -96,6 +97,7 @@ class RuntimeState:
 
     graph: HyperGraph
     rag: DNAMirrorHyperRAG
+    embedder: TextEmbedder
 
 
 def initialize_runtime(config: RAGConfig | None = None) -> RuntimeState:
@@ -104,7 +106,8 @@ def initialize_runtime(config: RAGConfig | None = None) -> RuntimeState:
     cfg = config or default_config()
     graph = build_default_hgraph()
     rag = DNAMirrorHyperRAG(graph, cfg)
-    return RuntimeState(graph=graph, rag=rag)
+    embedder = TextEmbedder()
+    return RuntimeState(graph=graph, rag=rag, embedder=embedder)
 
 
 def _ensure_unique_gene_id(gene: Gene, graph: HyperGraph) -> Gene:

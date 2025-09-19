@@ -11,6 +11,7 @@ from .core import (
     LightEnergyModule,
     QuantumFluctuationModule,
 )
+from .embeddings import TextEmbedder
 from .loaders import build_hgraph_from_sources, genes_from_text_document, chunk_plain_text
 from .runtime import (
     RuntimeState,
@@ -30,6 +31,7 @@ __all__ = [
     "DNAIndex",
     "LightEnergyModule",
     "QuantumFluctuationModule",
+    "TextEmbedder",
     "build_hgraph_from_sources",
     "genes_from_text_document",
     "chunk_plain_text",

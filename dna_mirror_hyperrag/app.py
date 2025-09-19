@@ -20,6 +20,7 @@ from dna_mirror_hyperrag.runtime import (
 runtime: RuntimeState = initialize_runtime()
 hg = runtime.graph
 rag = runtime.rag
+embedder = runtime.embedder
 
 app = FastAPI(title="DNA-Mirror-HyperRAG", version="0.4.0")
 
@@ -42,6 +43,29 @@ class UploadResponse(BaseModel):
     added_genes: list[str]
     added_edges: list[str]
     total_nodes: int
+
+
+class EmbeddingRequest(BaseModel):
+    model: str = "dna-hyperrag-text-embedding"
+    input: str | list[str]
+
+
+class EmbeddingData(BaseModel):
+    object: str = "embedding"
+    embedding: list[float]
+    index: int
+
+
+class EmbeddingUsage(BaseModel):
+    prompt_tokens: int
+    total_tokens: int
+
+
+class EmbeddingResponse(BaseModel):
+    object: str = "list"
+    data: list[EmbeddingData]
+    model: str
+    usage: EmbeddingUsage
 @app.get("/health")
 def health():
     return {"status": "ok", "nodes": len(hg.nodes), "edges": len(hg.edges), "k": rag.index.k}
@@ -126,6 +150,28 @@ async def upload_text_files(
         added_edges=added_edges,
         total_nodes=len(hg.nodes),
     )
+
+
+@app.post("/v1/embeddings", response_model=EmbeddingResponse)
+def create_embeddings(req: EmbeddingRequest):
+    if isinstance(req.input, str):
+        cleaned = req.input.strip()
+        texts = [cleaned] if cleaned else []
+    else:
+        texts = [t.strip() for t in req.input if t and t.strip()]
+
+    if not texts:
+        raise HTTPException(status_code=400, detail="Eingabe darf nicht leer sein.")
+
+    data: list[EmbeddingData] = []
+    token_count = 0
+    for idx, text in enumerate(texts):
+        token_count += len(text.split())
+        vector = embedder.embed_text(text)
+        data.append(EmbeddingData(embedding=vector, index=idx))
+
+    usage = EmbeddingUsage(prompt_tokens=token_count, total_tokens=token_count)
+    return EmbeddingResponse(data=data, model=req.model, usage=usage)
 
 # Minimal-UI
 @app.get("/ui")
